@@ -31,7 +31,7 @@ use Error qw(:try);             # for web services verification (you may comment
 use Data::Dumper;               # dump hashes for debugging
 use File::Temp qw/ tempfile /;  # create temp files
 
-our $VERSION = '1.50';
+our $VERSION = '1.51';
 
 =head1 NAME
 
@@ -60,6 +60,78 @@ system response times.
 
 Creates an C<Webinject> object.
 
+=over 4
+
+=item reporttype
+
+possible values are 'standard', 'nagios', 'mrtg' or 'external:'
+
+=item nooutput
+
+suppress all output to STDOUT, create only logilfes
+
+=item break_on_errors
+
+stop after the first testcase fails, otherwise Webinject would go on and
+execute all tests regardless of the previous case.
+
+=item timeout
+
+Default timeout is 180seconds. Timeout starts again for every testcase.
+
+=item useragent
+
+Set the useragent used in HTTP requests. Default is 'Webinject'.
+
+=item max_redirect
+
+Set maximum number of HTTP redirects. Default is 0.
+
+=item proxy
+
+Sets a proxy which is then used for http and https requests.
+
+=item output_dir
+
+Output directory where all logfiles will go to. Defaults to current directory.
+
+=item globalhttplog
+
+Can be 'yes' or 'onfail'. Will log the http request and response to a http.log file.
+
+=item httpauth
+
+Provides credentials for webserver authentications. The format is:
+
+  ['servername', 'portnumber', 'realm-name', 'username', 'password']
+
+=item baseurl
+
+the value can be used as {BASEURL} in the test cases
+
+=item baseurl1
+
+the value can be used as {BASEURL1} in the test cases
+
+=item baseurl2
+
+the value can be used as {BASEURL2} in the test cases
+
+=item standaloneplot
+
+can be "on" or "off". Default is off.
+Create gnuplot graphs when enabled.
+
+=item graphtype
+
+Defaults to 'lines'
+
+=item gnuplot
+
+Defines the path to your gnuplot binary.
+
+=back
+
 =cut
 
 sub new {
@@ -75,7 +147,11 @@ sub new {
 
     for my $opt_key ( keys %options ) {
         if( exists $self->{'config'}->{$opt_key} ) {
-            $self->{'config'}->{$opt_key} = $options{$opt_key};
+            if($opt_key eq 'httpauth') {
+                $self->_set_http_auth($options{$opt_key});
+            } else {
+                $self->{'config'}->{$opt_key} = $options{$opt_key};
+            }
         }
         else {
             $self->_usage("ERROR: unknown option: ".$opt_key);
@@ -258,20 +334,20 @@ sub _run_test_case {
     }
     $case->{'latency'} = $latency;
 
+    # verify result from http response
+    $self->_verify($response, $case);
+
     if($case->{verifypositivenext}) {
         $self->{'verifylater'} = $case->{'verifypositivenext'};
-        $self->_out(qq|Verify On Next Case: "$case->{verifypositivenext}" \n|);
+        $self->_out("Verify On Next Case: '".$case->{verifypositivenext}."' \n");
         push @{$case->{'messages'}}, {'key' => 'verifypositivenext', 'value' => $case->{verifypositivenext}, 'html' => "Verify On Next Case: ".$case->{verifypositivenext} };
     }
 
     if($case->{verifynegativenext}) {
         $self->{'verifylaterneg'} = $case->{'verifynegativenext'};
-        $self->_out(qq|Verify Negative On Next Case: "$case->{verifynegativenext}" \n|);
+        $self->_out("Verify Negative On Next Case: '".$case->{verifynegativenext}."' \n");
         push @{$case->{'messages'}}, {'key' => 'verifynegativenext', 'value' => $case->{verifynegativenext}, 'html' => "Verify Negative On Next Case: ".$case->{verifynegativenext} };
     }
-
-    # verify result from http response
-    $self->_verify($response, $case);
 
     # write to http.log file
     $self->_httplog($request, $response, $case);
@@ -416,13 +492,9 @@ sub _get_useragent {
         $useragent->agent($self->{'config'}->{'useragent'});
     }
 
-    # don't follow redirects for GET's (POST's already don't follow, by default)
-    unless(defined $self->{'config'}->{'max_redirect'}) {
-        $useragent->max_redirect('0');
-    }
-    else {
-        $useragent->max_redirect($self->{'config'}->{'max_redirect'});
-    }
+    # don't follow redirects unless set by config
+    push @{$useragent->requests_redirectable}, 'POST';
+    $useragent->max_redirect($self->{'config'}->{'max_redirect'});
 
     # add proxy support if it is set in config.xml
     if( $self->{'config'}->{'proxy'} ) {
@@ -433,12 +505,11 @@ sub _get_useragent {
     # corresponds to:
     # $useragent->credentials('servername:portnumber', 'realm-name', 'username' => 'password');
     if(scalar @{$self->{'config'}->{'httpauth'}}) {
-
         # add the credentials to the user agent here. The foreach gives the reference to the tuple ($elem), and we
         # deref $elem to get the array elements.
         for my $elem ( @{ $self->{'config'}->{'httpauth'} } ) {
             #print "adding credential: $elem->[0]:$elem->[1], $elem->[2], $elem->[3] => $elem->[4]\n";
-            $useragent->credentials( $elem->[0].":".$elem->[1], $elem->[2], $elem->[3] => $elem->[4] );
+            print $useragent->credentials( $elem->[0].":".$elem->[1], $elem->[2], $elem->[3] => $elem->[4] );
         }
     }
 
@@ -466,6 +537,8 @@ sub _set_defaults {
         'baseurl1'                  => '',
         'baseurl2'                  => '',
         'break_on_errors'           => 0,
+        'max_redirect'              => 0,
+        'globalhttplog'             => 'no',
     };
     $self->{'exit_codes'}         = {
         'UNKNOWN'  => 3,
@@ -662,14 +735,12 @@ sub _http_defaults {
     my $case      = shift;
 
     # add an additional HTTP Header if specified
-    if($case->{addheader}) {
+    if($case->{'addheader'}) {
         # can add multiple headers with a pipe delimiter
-        my @addheaders = split( /\|/mx, $case->{addheader} );
-        foreach (@addheaders) {
-            $_ =~ m~(.*): (.*)~mx;
+        for my $addheader (split /\|/mx, $case->{'addheader'}) {
+            $addheader =~ m~(.*):\ (.*)~mx;
             $request->header( $1 => $2 );   # using HTTP::Headers Class
         }
-        $case->{addheader} = '';
     }
 
     # print $self->{'request'}->as_string; print "\n\n";
@@ -819,20 +890,19 @@ sub _verify {
     confess("no response") unless defined $response;
     confess("no case")     unless defined $case;
 
-    for (qw/verifypositive verifypositive1 verifypositive2 verifypositive3/) {
-        if ( $case->{$_} ) {
-            $self->_out(qq|Verify: "$case->{$_}" \n|);
-            push @{$case->{'messages'}}, {'key' => $_, 'value' => $case->{$_}, 'html' => "Verify: ".$case->{$_} };
-            my $regex = $case->{$_};
-            $regex =~ s/\ /\\ /gmx;
+    for my $key (qw/verifypositive verifypositive1 verifypositive2 verifypositive3/) {
+        if( $case->{$key} ) {
+            $self->_out("Verify: '".$case->{$key}."' \n");
+            push @{$case->{'messages'}}, {'key' => $key, 'value' => $case->{$key}, 'html' => "Verify: ".$case->{$key} };
+            my $regex = $self->_fix_regex($case->{$key});
             # verify existence of string in response
             if( $response->as_string() =~ m~$regex~simx ) {
-                push @{$case->{'messages'}}, {'key' => $_.'-success', 'value' => 'true', 'html' => "<span class=\"pass\">Passed Positive Verification</span>" };
+                push @{$case->{'messages'}}, {'key' => $key.'-success', 'value' => 'true', 'html' => "<span class=\"pass\">Passed Positive Verification</span>" };
                 $self->_out("Passed Positive Verification \n");
                 $case->{'passedcount'}++;
             }
             else {
-                push @{$case->{'messages'}}, {'key' => $_.'-success', 'value' => 'false', 'html' => "<span class=\"fail\">Failed Positive Verification</span>" };
+                push @{$case->{'messages'}}, {'key' => $key.'-success', 'value' => 'false', 'html' => "<span class=\"fail\">Failed Positive Verification</span>" };
                 $self->_out("Failed Positive Verification \n");
                 $case->{'failedcount'}++;
                 $self->{'result'}->{'iscritical'} = 1;
@@ -840,21 +910,20 @@ sub _verify {
         }
     }
 
-    for (qw/verifynegative verifynegative1 verifynegative2 verifynegative3/) {
-        if ( $case->{$_} ) {
-            $self->_out(qq|Verify Negative: "$case->{$_}" \n|);
-            push @{$case->{'messages'}}, {'key' => $_, 'value' => $case->{$_}, 'html' => "Verify Negative: ".$case->{$_} };
-            my $regex = $case->{$_};
-            $regex =~ s/\ /\\ /gmx;
+    for my $key (qw/verifynegative verifynegative1 verifynegative2 verifynegative3/) {
+        if( $case->{$key} ) {
+            $self->_out("Verify Negative: '".$case->{$key}."' \n");
+            push @{$case->{'messages'}}, {'key' => $key, 'value' => $case->{$key}, 'html' => "Verify Negative: ".$case->{$key} };
+            my $regex = $self->_fix_regex($case->{$key});
             # verify existence of string in response
             if( $response->as_string() =~ m~$regex~simx ) {
-                push @{$case->{'messages'}}, {'key' => $_.'-success', 'value' => 'false', 'html' => '<span class="fail">Failed Negative Verification</span>' };
+                push @{$case->{'messages'}}, {'key' => $key.'-success', 'value' => 'false', 'html' => '<span class="fail">Failed Negative Verification</span>' };
                 $self->_out("Failed Negative Verification \n");
                 $case->{'failedcount'}++;
                 $self->{'result'}->{'iscritical'} = 1;
             }
             else {
-                push @{$case->{'messages'}}, {'key' => $_.'-success', 'value' => 'true', 'html' => '<span class="pass">Passed Negative Verification</span>' };
+                push @{$case->{'messages'}}, {'key' => $key.'-success', 'value' => 'true', 'html' => '<span class="pass">Passed Negative Verification</span>' };
                 $self->_out("Passed Negative Verification \n");
                 $case->{'passedcount'}++;
             }
@@ -862,11 +931,10 @@ sub _verify {
     }
 
     if($self->{'verifylater'}) {
-        my $regex = $self->{'verifylater'};
-        $regex =~ s/\ /\\ /gmx;
+        my $regex = $self->_fix_regex($self->{'verifylater'});
         # verify existence of string in response
         if($response->as_string() =~ m~$regex~simx ) {
-            push @{$case->{'messages'}}, {'key' => 'verifypositivenext-success', 'value' => 'true', '<span class="pass">Passed Positive Verification (verification set in previous test case)</span>' };
+            push @{$case->{'messages'}}, {'key' => 'verifypositivenext-success', 'value' => 'true', 'html' => '<span class="pass">Passed Positive Verification (verification set in previous test case)</span>' };
             $self->_out("Passed Positive Verification (verification set in previous test case) \n");
             $case->{'passedcount'}++;
         }
@@ -881,8 +949,7 @@ sub _verify {
     }
 
     if($self->{'verifylaterneg'}) {
-        my $regex = $self->{'verifylaterneg'};
-        $regex =~ s/\ /\\ /gmx;
+        my $regex = $self->_fix_regex($self->{'verifylaterneg'});
         # verify existence of string in response
         if($response->as_string() =~ m~$regex~simx) {
             push @{$case->{'messages'}}, {'key' => 'verifynegativenext-success', 'value' => 'false', 'html' => '<span class="fail">Failed Negative Verification (negative verification set in previous test case)</span>' };
@@ -1067,8 +1134,9 @@ sub _read_config_xml {
     foreach (@configlines) {
 
         for my $key (
-            qw/baseurl baseurl1 baseurl2 gnuplot proxy timeout
-            globaltimeout globalhttplog standaloneplot max_redirect/
+            qw/baseurl baseurl1 baseurl2 gnuplot proxy timeout output_dir
+            globaltimeout globalhttplog standaloneplot max_redirect
+            useragent/
           )
         {
 
@@ -1090,28 +1158,10 @@ sub _read_config_xml {
             #print "\nreporttype : $self->{'config'}->{'reporttype'} \n\n";
         }
 
-        if (/<useragent>/mx) {
-            # http useragent that will show up in webserver logs
-            if(m~<useragent>(.*)</useragent>~mx) {
-                $self->{'config'}->{'useragent'} = $1;
-                # print "\nuseragent : $self->{'config'}->{'useragent'} \n\n";
-            }
-        }
-
         if (/<httpauth>/mx) {
 
-            #each time we see an <httpauth>, we set @authentry to be the
-            #array of values, then we use [] to get a reference to that array
-            #and push that reference onto @httpauth.
-            my @authentry;
             $_ =~ m~<httpauth>(.*)</httpauth>~mx;
-            @authentry = split( /:/mx, $1 );
-            if ( $#authentry != 4 ) {
-                $self->_usage("ERROR: httpauth should have 5 fields delimited by colons");
-            }
-            else {
-                push( @{ $self->{'config'}->{'httpauth'} }, [@authentry] );
-            }
+            $self->_set_http_auth($1);
 
             #print "\nhttpauth : @{$self->{'config'}->{'httpauth'}} \n\n";
         }
@@ -1123,6 +1173,31 @@ sub _read_config_xml {
             #print "\n$filename \n\n";
             push @{ $self->{'casefilelist'} }, $filename;         #add next filename we grab to end of array
         }
+    }
+
+    return;
+}
+
+################################################################################
+# parse and set http auth config
+sub _set_http_auth {
+    my $self       = shift;
+    my $confstring = shift;
+
+    #each time we see an <httpauth>, we set @authentry to be the
+    #array of values, then we use [] to get a reference to that array
+    #and push that reference onto @httpauth.
+
+    my @authentry = split( /:/mx, $confstring );
+    if( scalar @authentry != 5 ) {
+        $self->_usage("ERROR: httpauth should have 5 fields delimited by colons, got: ".$confstring);
+    }
+    else {
+        push( @{ $self->{'config'}->{'httpauth'} }, [@authentry] );
+    }
+    # basic authentication only works with redirects enabled
+    if($self->{'config'}->{'max_redirect'} == 0) {
+        $self->{'config'}->{'max_redirect'}++;
     }
 
     return;
@@ -1258,41 +1333,38 @@ sub _httplog {
     my $request     = shift;
     my $response    = shift;
     my $case        = shift;
+    my $output      = '';
 
-    # we suppress most logging when running in a plugin mode
-    if($self->{'config'}->{'reporttype'} eq 'standard') {
-        my $output = '';
-
-        # http request - log setting per test case
-        if($case->{logrequest} && $case->{logrequest} =~ /yes/mxi ) {
-            $output .= $request->as_string."\n\n";
-        }
-
-        # http response - log setting per test case
-        if($case->{logresponse} && $case->{logresponse} =~ /yes/mxi ) {
-            $output .= $response->as_string."\n\n";
-        }
-
-        # global http log setting
-        if($self->{'config'}->{globalhttplog} && $self->{'config'}->{globalhttplog} =~ /yes/mxi ) {
-            $output .= $request->as_string."\n\n";
-            $output .= $response->as_string."\n\n";
-        }
-
-        # global http log setting - onfail mode
-        if($self->{'config'}->{globalhttplog} && $self->{'config'}->{globalhttplog} =~ /onfail/mxi && $self->{'result'}->{'iscritical'}) {
-            $output .= $request->as_string."\n\n";
-            $output .= $response->as_string."\n\n";
-        }
-
-        if($output ne '') {
-            open( my $httplogfile, ">>", $self->{'config'}->{'output_dir'}."http.log" )
-              or croak("\nERROR: Failed to open http.log file: $!\n");
-            print $httplogfile $output;
-            print $httplogfile "\n************************* LOG SEPARATOR *************************\n\n\n";
-            close($httplogfile);
-        }
+    # http request - log setting per test case
+    if($case->{'logrequest'} && $case->{'logrequest'} =~ /yes/mxi ) {
+        $output .= $request->as_string."\n\n";
     }
+
+    # http response - log setting per test case
+    if($case->{'logresponse'} && $case->{'logresponse'} =~ /yes/mxi ) {
+        $output .= $response->as_string."\n\n";
+    }
+
+    # global http log setting
+    if($self->{'config'}->{'globalhttplog'} && $self->{'config'}->{'globalhttplog'} =~ /yes/mxi ) {
+        $output .= $request->as_string."\n\n";
+        $output .= $response->as_string."\n\n";
+    }
+
+    # global http log setting - onfail mode
+    if($self->{'config'}->{'globalhttplog'} && $self->{'config'}->{'globalhttplog'} =~ /onfail/mxi && $self->{'result'}->{'iscritical'}) {
+        $output .= $request->as_string."\n\n";
+        $output .= $response->as_string."\n\n";
+    }
+
+    if($output ne '') {
+        open( my $httplogfile, ">>", $self->{'config'}->{'output_dir'}."http.log" )
+          or croak("\nERROR: Failed to open http.log file: $!\n");
+        print $httplogfile $output;
+        print $httplogfile "\n************************* LOG SEPARATOR *************************\n\n\n";
+        close($httplogfile);
+    }
+
     return;
 }
 
@@ -1426,14 +1498,16 @@ sub _finaltasks {
                 $rc = $self->{'exit_codes'}->{'WARNING'};
             }
             elsif( $self->{'config'}->{globaltimeout} && $self->{'result'}->{'totalruntime'} > $self->{'config'}->{globaltimeout} ) {
-                print "WebInject WARNING - All tests passed successfully but global timeout ($self->{'config'}->{globaltimeout} seconds) has been reached |$perfdata\n";
+                print "WebInject WARNING - All tests passed successfully but global timeout ($self->{'config'}->{globaltimeout} seconds) has been reached$perfdata\n";
                 $rc = $self->{'exit_codes'}->{'WARNING'};
             }
             else {
                 print "WebInject OK - All tests passed successfully in $self->{'result'}->{'totalruntime'} seconds$perfdata\n";
                 $rc = $self->{'exit_codes'}->{'OK'};
             }
-            print $self->{'out'};
+            if($self->{'result'}->{'iscritical'} or $self->{'result'}->{'iswarning'}) {
+                print $self->{'out'};
+            }
             return $rc;
         }
 
@@ -1524,6 +1598,18 @@ sub _plotit {
 }
 
 ################################################################################
+# fix a user supplied regex to make it compliant with mx options
+sub _fix_regex {
+    my $self  = shift;
+    my $regex = shift;
+
+    $regex =~ s/\\\ / /mx;
+    $regex =~ s/\ /\\ /gmx;
+
+    return $regex;
+}
+
+################################################################################
 # command line options
 sub _getoptions {
     my $self = shift;
@@ -1590,6 +1676,25 @@ EOB
     exit 3;
 }
 
+=head1 EXAMPLES
+
+=head2 example test case
+
+  <testcases>
+    <case
+      id             = "1"
+      description1   = "Sample Test Case"
+      method         = "get"
+      url            = "{BASEURL}/test.jsp"
+      verifypositive = "All tests succeded"
+      warning        = "5"
+      critical       = "15"
+      label          = "testpage"
+    />
+  </testcases>
+
+detailed description about the syntax of testcases can be found on the Webinject homepage.
+
 
 =head1 SEE ALSO
 
@@ -1598,11 +1703,13 @@ For more information about webinject visit http://www.webinject.org
 =head1 AUTHOR
 
 Corey Goldberg, E<lt>corey@goldb.orgE<gt>
+
 Sven Nierlein, E<lt>nierlein@cpan.orgE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 
 Copyright (C) 2010 by Sven Nierlein
+
 Copyright (C) 2004-2006 by Corey Goldberg
 
 This library is free software; you can redistribute it under the GPL2 license.

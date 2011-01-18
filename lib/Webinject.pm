@@ -1,6 +1,6 @@
 package Webinject;
 
-#    Copyright 2010 Sven Nierlein (nierlein@cpan.org)
+#    Copyright 2010.2011 Sven Nierlein (nierlein@cpan.org)
 #    Copyright 2004-2006 Corey Goldberg (corey@goldb.org)
 #
 #    This file is part of WebInject.
@@ -31,7 +31,7 @@ use Error qw(:try);             # for web services verification (you may comment
 use Data::Dumper;               # dump hashes for debugging
 use File::Temp qw/ tempfile /;  # create temp files
 
-our $VERSION = '1.55';
+our $VERSION = '1.56';
 
 =head1 NAME
 
@@ -209,22 +209,29 @@ sub engine {
 
         my $tempfile = $self->_convtestcases($currentcasefile);
 
-        my $xmltestcases = XMLin( $tempfile,
+        my $xmltestcases;
+        eval {
+            $xmltestcases = XMLin( $tempfile,
                                   varattr   => 'varname',
                                   variables => $self->{'config'} );    # slurp test case file to parse (and specify variables tag)
+        };
+        if($@) {
+            my $error = $@;
+            $error =~ s/^\s*//mx;
+            $self->_usage("ERROR: reading xml test case ".$currentcasefile." failed: ".$error);
+        }
+
         # fix case if there is only one case
         if( defined $xmltestcases->{'case'}->{'id'} ) {
             my $tmpcase = $xmltestcases->{'case'};
             $xmltestcases->{'case'} = { $tmpcase->{'id'} => $tmpcase };
         }
-        #print Dumper($xmltestcases);  #for debug, dump hash of xml
-        #print keys %{$self->{'config'}->file};  #for debug, print keys from dereferenced hash
 
         #delete the temp file as soon as we are done reading it
         if ( -e $tempfile ) { unlink $tempfile; }
 
         my $repeat = 1;
-        if(defined $xmltestcases->{repeat}) {
+        if(defined $xmltestcases->{repeat} and $xmltestcases->{repeat} > 0) {
             $repeat = $xmltestcases->{repeat};
         }
 
@@ -248,7 +255,11 @@ sub engine {
                     $case->{$key} = $xmltestcases->{'case'}->{$testnum}->{$key};
                 }
 
-                $self->_out(qq|Test:  $currentcasefile - $testnum \n|);
+                my $label = '';
+                if(defined $case->{'label'}) {
+                    $label = $case->{'label'}." - ";
+                }
+                $self->_out(qq|Test: $label$currentcasefile - $testnum \n|);
 
                 $case = $self->_run_test_case($case, $useragent);
 
@@ -894,7 +905,8 @@ sub _verify {
     confess("no response") unless defined $response;
     confess("no case")     unless defined $case;
 
-    for my $key (qw/verifypositive verifypositive1 verifypositive2 verifypositive3/) {
+    for my $nr ('', 1..1000) {
+        my $key = "verifypositive".$nr;
         if( $case->{$key} ) {
             $self->_out("Verify: '".$case->{$key}."' \n");
             push @{$case->{'messages'}}, {'key' => $key, 'value' => $case->{$key}, 'html' => "Verify: ".$case->{$key} };
@@ -912,9 +924,13 @@ sub _verify {
                 $self->{'result'}->{'iscritical'} = 1;
             }
         }
+        elsif($nr ne '' and $nr > 5) {
+            last;
+        }
     }
 
-    for my $key (qw/verifynegative verifynegative1 verifynegative2 verifynegative3/) {
+    for my $nr ('', 1..1000) {
+        my $key = "verifynegative".$nr;
         if( $case->{$key} ) {
             $self->_out("Verify Negative: '".$case->{$key}."' \n");
             push @{$case->{'messages'}}, {'key' => $key, 'value' => $case->{$key}, 'html' => "Verify Negative: ".$case->{$key} };
@@ -931,6 +947,9 @@ sub _verify {
                 $self->_out("Passed Negative Verification \n");
                 $case->{'passedcount'}++;
             }
+        }
+        elsif($nr ne '' and $nr > 5) {
+            last;
         }
     }
 
@@ -1522,11 +1541,9 @@ sub _finaltasks {
         {    #report results in MRTG format
             if( $self->{'result'}->{'totalcasesfailedcount'} > 0 ) {
                 print "$self->{'result'}->{'totalruntime'}\n$self->{'result'}->{'totalruntime'}\n\nWebInject CRITICAL - $self->{'result'}->{'returnmessage'} \n";
-                return 0;
             }
             else {
                 print "$self->{'result'}->{'totalruntime'}\n$self->{'result'}->{'totalruntime'}\n\nWebInject OK - All tests passed successfully in $self->{'result'}->{'totalruntime'} seconds \n";
-                return 0;
             }
         }
 
@@ -1546,6 +1563,8 @@ sub _finaltasks {
         }
 
     }
+
+    return 1 if $self->{'result'}->{'totalcasesfailedcount'} > 0;
     return 0;
 }
 

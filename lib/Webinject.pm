@@ -31,7 +31,7 @@ use Error qw(:try);             # for web services verification (you may comment
 use Data::Dumper;               # dump hashes for debugging
 use File::Temp qw/ tempfile /;  # create temp files
 
-our $VERSION = '1.67';
+our $VERSION = '1.68';
 
 =head1 NAME
 
@@ -157,6 +157,9 @@ sub new {
             $self->_usage("ERROR: unknown option: ".$opt_key);
         }
     }
+
+    # get command line options
+    $self->_getoptions();
 
     return $self;
 }
@@ -570,6 +573,7 @@ sub _set_defaults {
         'max_redirect'              => 0,
         'globalhttplog'             => 'no',
         'proxy'                     => '',
+        'timeout'                   => 180,
     };
     $self->{'exit_codes'}         = {
         'UNKNOWN'  => 3,
@@ -583,7 +587,6 @@ sub _set_defaults {
     };
     $self->{'out'}                = '';
     $self->_reset_result();
-    $self->_getoptions(); # get command line options
     return;
 }
 
@@ -1119,6 +1122,11 @@ sub _parseresponse {
             $self->{'parsedresult'}->{$type} = $1;
         }
         ## use critic
+        else {
+            push @{$case->{'messages'}}, {'key' => $type.'-success', 'value' => 'false', 'html' => "<span class=\"fail\">Failed Parseresult, cannot find $leftboundary(.*?)$rightboundary</span>" };
+            $self->_out("Failed Parseresult, cannot find $leftboundary(*)$rightboundary\n");
+            $self->{'result'}->{'iswarning'} = 1;
+        }
 
         if ($escape) {
             if ( $escape eq 'escape' ) {
@@ -1532,14 +1540,22 @@ sub _finaltasks {
             if(defined $self->{'config'}->{globaltimeout}) {
                 $crit = $self->{'config'}->{globaltimeout};
             }
+            my $lastid = 0;
             my $perfdata = '|time='.$self->{'result'}->{'totalruntime'}.';0;'.$crit.';0;0';
             for my $file (@{$self->{'result'}->{'files'}}) {
                 for my $case (@{$file->{'cases'}}) {
-                    my $warn = $case->{'warning'}  || 0;
-                    my $crit = $case->{'critical'} || 0;
-                    my $label = $case->{'label'}    || 'case'.$case->{'id'};
+                    my $warn   = $case->{'warning'}  || 0;
+                    my $crit   = $case->{'critical'} || 0;
+                    my $label  = $case->{'label'}    || 'case'.$case->{'id'};
                     $perfdata .= ' '.$label.'='.$case->{'latency'}.';'.$warn.';'.$crit.';0;0';
+                    $lastid = $case->{'id'};
                 }
+            }
+            # report performance data for missed cases too
+            for my $nr (1..($self->{'result'}->{'casecount'} - $self->{'result'}->{'totalruncount'})) {
+                $lastid++;
+                my $label  = 'case'.$lastid;
+                $perfdata .= ' '.$label.'=0;0;0;0;0';
             }
 
             my $rc;
@@ -1562,6 +1578,7 @@ sub _finaltasks {
             if($self->{'result'}->{'iscritical'} or $self->{'result'}->{'iswarning'}) {
                 print $self->{'out'};
             }
+            $self->{'result'}->{'perfdata'} = $perfdata;
             return $rc;
         }
 

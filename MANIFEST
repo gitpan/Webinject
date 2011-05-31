@@ -26,6 +26,7 @@ t/04-Timeouts.t
 t/05-Basic_Auth.t
 t/06-Proxy.t
 t/20-Full_Test_Case.t
+t/30-Nagios_Perf_Data.t
 t/97-Pod.t
 t/98-Pod-Coverage.t
 t/99-Perl-Critic.t
@@ -36,7 +37,11 @@ t/data/04-repeated_tests.xml
 t/data/05-report_types.xml
 t/data/06-thresholds.xml
 t/data/08-custom_var.xml
+t/data/09-fileupload.xml
 t/data/20-full_test.xml
+t/data/30-nagios_perf_data.xml
 t/data/external.pm
+t/data/fileup1.txt
+t/data/fileup2.png
 t/perlcriticrc
 t/TestWebServer.pm

@@ -31,7 +31,7 @@ use Error qw(:try);             # for web services verification (you may comment
 use Data::Dumper;               # dump hashes for debugging
 use File::Temp qw/ tempfile /;  # create temp files
 
-our $VERSION = '1.71';
+our $VERSION = '1.72';
 
 =head1 NAME
 
@@ -1460,9 +1460,9 @@ sub _convertbackxml {
 sub _convertbackxmlresult {
     my ( $self, $string, $timestamp ) = @_;
     return unless defined $string;
-    $string =~ s~{PARSEDRESULT}~$self->{'parsedresult'}->{parseresponse}~gmx   if defined $self->{'parsedresult'}->{parseresponse};
+    $string =~ s~\{PARSEDRESULT\}~$self->{'parsedresult'}->{'parseresponse'}~gmx if defined $self->{'parsedresult'}->{'parseresponse'};
     for my $x (1..5) {
-        $string =~ s~{PARSEDRESULT$x}~$self->{'parsedresult'}->{parseresponse$x}~gmx if defined $self->{'parsedresult'}->{"parseresponse$x"};
+        $string =~ s~\{PARSEDRESULT$x\}~$self->{'parsedresult'}->{"parseresponse$x"}~gmx if defined $self->{'parsedresult'}->{"parseresponse$x"};
     }
     return $string;
 }

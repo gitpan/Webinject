@@ -31,7 +31,7 @@ use Error qw(:try);             # for web services verification (you may comment
 use Data::Dumper;               # dump hashes for debugging
 use File::Temp qw/ tempfile /;  # create temp files
 
-our $VERSION = '1.76';
+our $VERSION = '1.78';
 
 =head1 NAME
 
@@ -330,7 +330,7 @@ sub _run_test_case {
     for my $key (keys %{$case}) {
         $case->{$key} = $self->_convertbackxml($case->{$key}, $timestamp);
         next if $key eq 'errormessage';
-        $case->{$key} = $self->_convertbackxmlresult($case->{$key}, $timestamp);
+        $case->{$key} = $self->_convertbackxmlresult($case->{$key});
     }
 
     if( $self->{'gui'} ) { $self->_gui_tc_descript($case); }
@@ -352,58 +352,67 @@ sub _run_test_case {
     push @{$case->{'messages'}}, { 'html' => "</td><td>" }; # HTML: next column
 
     my($latency,$request,$response);
-    if($case->{method}){
-        if(lc $case->{method} eq "get") {
-            ($latency,$request,$response) = $self->_httpget($useragent, $case);
-        }
-        elsif(lc $case->{method} eq "post") {
-            ($latency,$request,$response) = $self->_httppost($useragent, $case);
+    alarm($self->{'config'}->{'timeout'}+1); # timeout should be handled by LWP, but just in case...
+    eval {
+        local $SIG{ALRM} = sub { die("alarm") };
+        if($case->{method}){
+            if(lc $case->{method} eq "get") {
+                ($latency,$request,$response) = $self->_httpget($useragent, $case);
+            }
+            elsif(lc $case->{method} eq "post") {
+                ($latency,$request,$response) = $self->_httppost($useragent, $case);
+            }
+            else {
+                $self->_usage('ERROR: bad HTTP Request Method Type, you must use "get" or "post"');
+            }
         }
         else {
-            $self->_usage('ERROR: bad HTTP Request Method Type, you must use "get" or "post"');
+            ($latency,$request,$response) = $self->_httpget($useragent, $case);     # use "get" if no method is specified
         }
-    }
-    else {
-        ($latency,$request,$response) = $self->_httpget($useragent, $case);     # use "get" if no method is specified
-    }
-    $case->{'latency'}  = $latency;
-    $case->{'request'}  = $request->as_string();
-    $case->{'response'} = $response->as_string();
+    };
+    alarm(0);
+    if($@) {
+        $case->{'iscritical'} = 1;
+    } else {
+        $case->{'latency'}  = $latency;
+        $case->{'request'}  = $request->as_string();
+        $case->{'response'} = $response->as_string();
 
-    # verify result from http response
-    $self->_verify($response, $case);
+        # verify result from http response
+        $self->_verify($response, $case);
 
-    if($case->{verifypositivenext}) {
-        $self->{'verifylater'} = $case->{'verifypositivenext'};
-        $self->_out("Verify On Next Case: '".$case->{verifypositivenext}."' \n");
-        push @{$case->{'messages'}}, {'key' => 'verifypositivenext', 'value' => $case->{verifypositivenext}, 'html' => "Verify On Next Case: ".$case->{verifypositivenext}."<br />" };
-    }
+        if($case->{verifypositivenext}) {
+            $self->{'verifylater'} = $case->{'verifypositivenext'};
+            $self->_out("Verify On Next Case: '".$case->{verifypositivenext}."' \n");
+            push @{$case->{'messages'}}, {'key' => 'verifypositivenext', 'value' => $case->{verifypositivenext}, 'html' => "Verify On Next Case: ".$case->{verifypositivenext}."<br />" };
+        }
 
-    if($case->{verifynegativenext}) {
-        $self->{'verifylaterneg'} = $case->{'verifynegativenext'};
-        $self->_out("Verify Negative On Next Case: '".$case->{verifynegativenext}."' \n");
-        push @{$case->{'messages'}}, {'key' => 'verifynegativenext', 'value' => $case->{verifynegativenext}, 'html' => "Verify Negative On Next Case: ".$case->{verifynegativenext}."<br />" };
-    }
+        if($case->{verifynegativenext}) {
+            $self->{'verifylaterneg'} = $case->{'verifynegativenext'};
+            $self->_out("Verify Negative On Next Case: '".$case->{verifynegativenext}."' \n");
+            push @{$case->{'messages'}}, {'key' => 'verifynegativenext', 'value' => $case->{verifynegativenext}, 'html' => "Verify Negative On Next Case: ".$case->{verifynegativenext}."<br />" };
+        }
 
-    # write to http.log file
-    $self->_httplog($request, $response, $case);
+        # write to http.log file
+        $self->_httplog($request, $response, $case);
 
-    # send perf data to log file for plotting
-    $self->_plotlog($latency);
+        # send perf data to log file for plotting
+        $self->_plotlog($latency);
 
-    # call the external plotter to create a graph
-    $self->_plotit();
+        # call the external plotter to create a graph
+        $self->_plotit();
 
-    if( $self->{'gui'} ) {
-        $self->_gui_updatemontab();                 # update monitor with the newly rendered plot graph
-    }
+        if( $self->{'gui'} ) {
+            $self->_gui_updatemontab();                 # update monitor with the newly rendered plot graph
+        }
 
-    $self->_parseresponse($response, $case);        # grab string from response to send later
+        $self->_parseresponse($response, $case);        # grab string from response to send later
 
-    # make parsed results available in the errormessage
-    for my $key (keys %{$case}) {
-        next unless $key eq 'errormessage';
-        $case->{$key} = $self->_convertbackxmlresult($case->{$key}, $timestamp);
+        # make parsed results available in the errormessage
+        for my $key (keys %{$case}) {
+            next unless $key eq 'errormessage';
+            $case->{$key} = $self->_convertbackxmlresult($case->{$key});
+        }
     }
 
     push @{$case->{'messages'}}, { 'html' => "</td><td>\n" }; # HTML: next column
@@ -935,10 +944,13 @@ sub _httppost_xml {
     my @xmlbody = <$xmlbody>;    # read the file into an array
     close($xmlbody);
 
+    # Get the XML input file to use PARSEDRESULT and substitute the contents
+    my $content = $self->_convertbackxmlresult(join( " ", @xmlbody ));
+
     $self->_out("POST Request: ".$case->{url}."\n");
     $request = new HTTP::Request( 'POST', $case->{url} );
     $request->content_type($case->{posttype});
-    $request->content( join( " ", @xmlbody ) );    # load the contents of the file into the request body
+    $request->content( $content );    # load the contents of the file into the request body
 
     ($latency,$request,$response) = $self->_http_defaults($request, $useragent, $case);
 
@@ -1490,7 +1502,7 @@ sub _convertbackxml {
 ################################################################################
 # converts replaced xml with parsed result
 sub _convertbackxmlresult {
-    my ( $self, $string, $timestamp ) = @_;
+    my ( $self, $string) = @_;
     return unless defined $string;
     $string =~ s~\{PARSEDRESULT\}~$self->{'parsedresult'}->{'parseresponse'}~gmx if defined $self->{'parsedresult'}->{'parseresponse'};
     for my $x (1..5) {

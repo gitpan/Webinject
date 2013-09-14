@@ -31,7 +31,7 @@ use Error qw(:try);             # for web services verification (you may comment
 use Data::Dumper;               # dump hashes for debugging
 use File::Temp qw/ tempfile /;  # create temp files
 
-our $VERSION = '1.78';
+our $VERSION = '1.80';
 
 =head1 NAME
 
@@ -574,7 +574,9 @@ sub _get_useragent {
     my $useragent  = LWP::UserAgent->new(keep_alive=>1);
 
     # store cookies in our LWP object
-    my($fh, $cookietempfilename) = tempfile(undef, UNLINK => 1);
+    my $fh;
+    our $cookietempfilename;
+    ($fh, $cookietempfilename) = tempfile(undef, UNLINK => 1);
     unlink ($cookietempfilename);
     $useragent->cookie_jar(HTTP::Cookies->new(
                                                  file     => $cookietempfilename,
@@ -1682,13 +1684,13 @@ sub _finaltasks {
                 $crit = $self->{'config'}->{globaltimeout};
             }
             my $lastid = 0;
-            my $perfdata = '|time='.$self->{'result'}->{'totalruntime'}.';0;'.$crit.';0;0';
+            my $perfdata = '|time='.$self->{'result'}->{'totalruntime'}.'s;0;'.$crit.';0;0';
             for my $file (@{$self->{'result'}->{'files'}}) {
                 for my $case (@{$file->{'cases'}}) {
                     my $warn   = $case->{'warning'}  || 0;
                     my $crit   = $case->{'critical'} || 0;
                     my $label  = $case->{'label'}    || 'case'.$case->{'id'};
-                    $perfdata .= ' '.$label.'='.$case->{'latency'}.';'.$warn.';'.$crit.';0;0';
+                    $perfdata .= ' '.$label.'='.$case->{'latency'}.'s;'.$warn.';'.$crit.';0;0';
                     $lastid = $case->{'id'};
                 }
             }
@@ -1696,7 +1698,7 @@ sub _finaltasks {
             for my $nr (1..($self->{'result'}->{'casecount'} - $self->{'result'}->{'totalruncount'})) {
                 $lastid++;
                 my $label  = 'case'.$lastid;
-                $perfdata .= ' '.$label.'=0;0;0;0;0';
+                $perfdata .= ' '.$label.'=0s;0;0;0;0';
             }
 
             my($rc,$message);
@@ -1897,6 +1899,13 @@ sub _usage {
       $0 --version|-v
 EOB
     exit 3;
+}
+
+################################################################################
+# make sure we don't keep the cookie temp file
+END {
+    our $cookietempfilename;
+    unlink($cookietempfilename) if $cookietempfilename;
 }
 
 =head1 EXAMPLES

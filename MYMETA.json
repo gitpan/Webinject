@@ -4,7 +4,7 @@
       "Corey Goldberg, <corey@goldb.org>"
    ],
    "dynamic_config" : 0,
-   "generated_by" : "Module::Install version 1.06, CPAN::Meta::Converter version 2.131560",
+   "generated_by" : "ExtUtils::MakeMaker version 6.62, CPAN::Meta::Converter version 2.131560",
    "license" : [
       "unknown"
    ],
@@ -15,9 +15,8 @@
    "name" : "Webinject",
    "no_index" : {
       "directory" : [
-         "examples",
-         "inc",
-         "t"
+         "t",
+         "inc"
       ]
    },
    "prereqs" : {
@@ -28,7 +27,7 @@
       },
       "configure" : {
          "requires" : {
-            "ExtUtils::MakeMaker" : "6.59"
+            "ExtUtils::MakeMaker" : "0"
          }
       },
       "runtime" : {
@@ -48,17 +47,5 @@
       }
    },
    "release_status" : "stable",
-   "resources" : {
-      "bugtracker" : {
-         "web" : "http://github.com/sni/Webinject/issues"
-      },
-      "homepage" : "http://www.webinject.org",
-      "license" : [
-         "http://opensource.org/licenses/gpl-2.0.php"
-      ],
-      "repository" : {
-         "url" : "http://github.com/sni/Webinject"
-      }
-   },
-   "version" : "1.80"
+   "version" : "1.82"
 }

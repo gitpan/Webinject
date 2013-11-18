@@ -30,4 +30,4 @@ requires:
   XML::Parser: 0
   XML::Simple: 0
   perl: 5.006
-version: 1.84
+version: 1.86
